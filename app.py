@@ -5,6 +5,7 @@ from io import BytesIO
 from PIL import Image
 import tensorflow as tf
 from pathlib import Path
+from utils import analyze_image_with_openai, SYSTEM_PROMPT, VECTOR_STORE_ID
 import json
 import uvicorn
 import openai
@@ -16,12 +17,19 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
 
-def get_openai_response(prompt):
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message["content"]
+async def get_llm_advice(plant: str, disease: str, image_path: str) -> str:
+    if "healthy" in disease.lower():
+        return f"{plant} appears healthy! No treatment needed."
+    elif "unknown" in disease.lower():
+        return "Could not confidently identify the condition."
+    try:
+        # Use utils.py to analyze image and result
+        result_text = f"Plant: {plant}, Disease: {disease}"
+        analysis = analyze_image_with_openai(image_path, result_text)
+        return analysis
+    except Exception as e:
+        print(f"OpenAI API error: {str(e)}")
+        return {"error": f"Could not generate treatment advice for {disease}"}
 
 app = FastAPI()
 
@@ -93,33 +101,6 @@ def preprocess_image(image_data):
     except Exception as e:
         raise ValueError(f"Image processing failed: {str(e)}")
 
-async def get_llm_advice(plant: str, disease: str) -> str:
-    if "healthy" in disease.lower():
-        return f"{plant} appears healthy! No treatment needed."
-    elif "unknown" in disease.lower():
-        return "Could not confidently identify the condition."
-    
-    try:
-        prompt = f"""Provide a concise treatment plan for {disease} in {plant} plants as JSON:
-        {{
-            "IMMEDIATE_ACTION": "...",
-            "ORGANIC_TREATMENT": "...",
-            "CHEMICAL_TREATMENT": "...",
-            "PREVENTION": "..."
-        }}"""
-        
-        response = await model.generate_content_async(prompt)
-        response_text = response.text.strip()
-        
-        # Try to extract JSON from response
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group(0))
-        return {"error": "Could not parse treatment advice"}
-    
-    except Exception as e:
-    print(f"OpenAI API error: {str(e)}")
-        return {"error": f"Could not generate treatment advice for {disease}"}
 
 @app.get("/")
 def read_root():
@@ -134,9 +115,20 @@ async def predict(file: UploadFile = File(...)):
         image_batch = np.expand_dims(image_array, axis=0)
         
         # Plant type prediction
-        plant_predictions = model_loader.plant_classifier.predict(image_batch)
-        plant_type_idx = np.argmax(plant_predictions[0])
-        plant_confidence = plant_predictions[0][plant_type_idx]
+        try:
+            plant_predictions = model_loader.plant_classifier.predict(image_batch)
+            if plant_predictions is None or len(plant_predictions) == 0:
+                raise ValueError("Model returned no predictions")
+                
+            plant_type_idx = np.argmax(plant_predictions[0])
+            plant_confidence = plant_predictions[0][plant_type_idx]
+        except tf.errors.ResourceExhaustedError:
+            raise HTTPException(status_code=503, detail="Server is busy, please try again later")
+        except ValueError as e:
+            raise HTTPException(status_code=500, detail=f"Model prediction failed: {str(e)}")
+        except Exception as e:
+            print(f"Unexpected model error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Model prediction failed: {str(e)}")
         
         result = {
             'plant_type': 'unknown',
@@ -158,9 +150,20 @@ async def predict(file: UploadFile = File(...)):
                 disease_model = model_loader.disease_classifiers[predicted_plant]['model']
                 disease_classes = model_loader.disease_classifiers[predicted_plant]['class_names']
                 
-                disease_predictions = disease_model.predict(image_batch)
-                disease_idx = np.argmax(disease_predictions[0])
-                disease_confidence = disease_predictions[0][disease_idx]
+                try:
+                    disease_predictions = disease_model.predict(image_batch)
+                    if disease_predictions is None or len(disease_predictions) == 0:
+                        raise ValueError("Disease model returned no predictions")
+                        
+                    disease_idx = np.argmax(disease_predictions[0])
+                    disease_confidence = disease_predictions[0][disease_idx]
+                except tf.errors.ResourceExhaustedError:
+                    raise HTTPException(status_code=503, detail="Server is busy processing disease detection, please try again later")
+                except ValueError as e:
+                    raise HTTPException(status_code=500, detail=f"Disease model prediction failed: {str(e)}")
+                except Exception as e:
+                    print(f"Unexpected disease model error: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"Disease model prediction failed: {str(e)}")
                 
                 # Check disease confidence threshold
                 if disease_confidence >= DISEASE_CONFIDENCE_THRESHOLD:
@@ -173,11 +176,34 @@ async def predict(file: UploadFile = File(...)):
                     
                     # Get treatment advice if not healthy
                     if not result['is_healthy']:
-                        result['treatment'] = await get_llm_advice(
-                            plant=predicted_plant,
-                            disease=predicted_disease
-                        )
-                        result['message'] = f"Disease detected: {predicted_disease}"
+                        temp_image_path = "temp_uploaded_image.jpg"
+                        try:
+                            # Save image data with verification
+                            with open(temp_image_path, "wb") as f:
+                                if len(image_data) == 0:
+                                    raise IOError("Empty image data")
+                                f.write(image_data)
+                            
+                            # Verify the file was saved correctly
+                            if not os.path.exists(temp_image_path) or os.path.getsize(temp_image_path) == 0:
+                                raise IOError("Failed to save temporary image file")
+                            
+                            result['treatment'] = await get_llm_advice(
+                                plant=predicted_plant,
+                                disease=predicted_disease,
+                                image_path=temp_image_path
+                            )
+                            result['message'] = f"Disease detected: {predicted_disease}"
+                        except IOError as e:
+                            print(f"File handling error: {str(e)}")
+                            raise HTTPException(status_code=500, detail=f"File handling error: {str(e)}")
+                        finally:
+                            # Clean up in finally block to ensure it happens
+                            if os.path.exists(temp_image_path):
+                                try:
+                                    os.remove(temp_image_path)
+                                except Exception as e:
+                                    print(f"Failed to clean up temporary file: {e}")
                     else:
                         result['message'] = f"{predicted_plant} appears healthy!"
                 else:

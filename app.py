@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, File, UploadFile, HTTPException
 import numpy as np
 from io import BytesIO
@@ -6,13 +7,21 @@ import tensorflow as tf
 from pathlib import Path
 import json
 import uvicorn
-import google.generativeai as genai
+import openai
 import re
 from fastapi.middleware.cors import CORSMiddleware
 
-# Configure Gemini AI
-genai.configure(api_key="")
-model = genai.GenerativeModel('gemini-2.5-flash')
+
+# Configure OpenAI
+import os
+openai.api_key = os.getenv("OPENAI_API_KEY", "")
+
+def get_openai_response(prompt):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message["content"]
 
 app = FastAPI()
 
@@ -109,7 +118,7 @@ async def get_llm_advice(plant: str, disease: str) -> str:
         return {"error": "Could not parse treatment advice"}
     
     except Exception as e:
-        print(f"Gemini API error: {str(e)}")
+    print(f"OpenAI API error: {str(e)}")
         return {"error": f"Could not generate treatment advice for {disease}"}
 
 @app.get("/")

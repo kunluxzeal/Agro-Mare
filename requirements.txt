@@ -5,3 +5,4 @@ pillow
 tensorflow
 openai
 python-dotenv
+elevenlabs

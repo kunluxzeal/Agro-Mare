@@ -4,13 +4,23 @@ from dotenv import load_dotenv
 import base64
 import json
 import re
+from elevenlabs import generate, set_api_key
 
 
 load_dotenv()
 
+# Initialize API keys
 client = openai.Client(
     api_key=os.getenv("OPENAI_API_KEY", "")
 )
+set_api_key(os.getenv("ELEVEN_LABS_API_KEY", ""))
+
+# Voice IDs for different scenarios
+VOICE_IDS = {
+    "default": os.getenv("ELEVEN_LABS_DEFAULT_VOICE", "21m00Tcm4TlvDq8ikWAM"),  # Rachel voice
+    "alert": os.getenv("ELEVEN_LABS_ALERT_VOICE", "AZnzlk1XvdvUeBnXmlld"),     # Domi voice
+    "info": os.getenv("ELEVEN_LABS_INFO_VOICE", "EXAVITQu4vr4xnSDxMaL")        # Bella voice
+}
 
 
 SYSTEM_PROMPT = """
@@ -90,7 +100,22 @@ def analyze_image_with_openai(image_path: str, result_text: str = "Analyze this 
     try:
         raw_text = extract_text_from_response(response)
         cleaned_text = clean_json_string(raw_text)
-        return json.loads(cleaned_text)
+        result = json.loads(cleaned_text)
+        
+        # Generate voice message based on analysis
+        voice_message = f"I detected a {result['plant_type']} plant. "
+        if result['is_healthy']:
+            voice_message += "The plant appears to be healthy."
+            voice_type = "info"
+        else:
+            voice_message += f"I found {result['disease']}. "
+            voice_message += "Here's what you should do: " + ", ".join(result['treatment']['cultural'][:2])
+            voice_type = "alert"
+        
+        # Generate voice output
+        result['voice_output'] = generate_voice_output(voice_message, voice_type)
+        
+        return result
     except Exception as e:
         return {"error": f"Could not parse OpenAI response: {e}", "raw_text": raw_text if 'raw_text' in locals() else None}
 
@@ -116,3 +141,27 @@ def clean_json_string(raw_text):
     cleaned = re.sub(r"^```(json)?", "", raw_text.strip(), flags=re.IGNORECASE)
     cleaned = re.sub(r"```$", "", cleaned.strip())
     return cleaned.strip()
+
+
+def generate_voice_output(text: str, voice_type: str = "default") -> bytes:
+    """
+    Generate voice output using Eleven Labs API.
+    
+    Args:
+        text: The text to convert to speech
+        voice_type: Type of voice to use ("default", "alert", or "info")
+        
+    Returns:
+        bytes: Audio data in bytes
+    """
+    voice_id = VOICE_IDS.get(voice_type, VOICE_IDS["default"])
+    try:
+        audio = generate(
+            text=text,
+            voice=voice_id,
+            model="eleven_monolingual_v1"
+        )
+        return audio
+    except Exception as e:
+        print(f"Voice generation failed: {str(e)}")
+        return None

@@ -1,4 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import StreamingResponse
+from io import BytesIO
 import numpy as np
 from io import BytesIO
 from PIL import Image
@@ -152,6 +154,19 @@ async def predict(file: UploadFile = File(...)):
                 result_text="Analyze and return disease prediction + treatment advice in JSON format"
             )
 
+            # Check if voice output is requested
+            accept_header = request.headers.get("accept", "")
+            if "audio/" in accept_header and treatment_json.get('voice_output'):
+                return StreamingResponse(
+                    BytesIO(treatment_json['voice_output']),
+                    media_type="audio/mpeg",
+                    headers={"X-Analysis": json.dumps(treatment_json)}
+                )
+            
+            # Remove voice_output from JSON response as it's binary data
+            if 'voice_output' in treatment_json:
+                del treatment_json['voice_output']
+                
             return {
                 "mode": "online",
                 "analysis": treatment_json

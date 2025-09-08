@@ -4,22 +4,32 @@ from dotenv import load_dotenv
 import base64
 import json
 import re
-from elevenlabs import generate, set_api_key
-
+from elevenlabs import ElevenLabs 
+from pydub import AudioSegment
+import tempfile
+import requests
+from io import BytesIO
 
 load_dotenv()
 
 # Initialize API keys
-client = openai.Client(
-    api_key=os.getenv("OPENAI_API_KEY", "")
-)
-set_api_key(os.getenv("ELEVEN_LABS_API_KEY", ""))
+client = openai.Client(api_key=os.getenv("OPENAI_API_KEY", ""))
+
+
+stores = client.vector_stores.list()
+for vs in stores.data:
+    print(vs.id, vs.name)
+
+# ElevenLabs client
+tts_client = ElevenLabs(api_key=os.getenv("ELEVEN_LABS_API_KEY", ""))
+
 
 # Voice IDs for different scenarios
 VOICE_IDS = {
     "default": os.getenv("ELEVEN_LABS_DEFAULT_VOICE", "21m00Tcm4TlvDq8ikWAM"),  # Rachel voice
     "alert": os.getenv("ELEVEN_LABS_ALERT_VOICE", "AZnzlk1XvdvUeBnXmlld"),     # Domi voice
-    "info": os.getenv("ELEVEN_LABS_INFO_VOICE", "EXAVITQu4vr4xnSDxMaL")        # Bella voice
+    "info": os.getenv("ELEVEN_LABS_INFO_VOICE", "EXAVITQu4vr4xnSDxMaL"),        # Bella voice
+    "olufunmilola" : os.getenv("ELEVEN_LABS_OLUFUNMILOLA_VOICE", "9Dbo4hEvXQ5l7MXGZFQA") # Olufunmilola voice
 }
 
 
@@ -46,8 +56,22 @@ No explanations, no markdown, no text outside JSON.
 """
 
 
-# Vector store ID for file searching
-VECTOR_STORE_ID = "vs_689cb1ad26948191ad81f68542ff8a04"
+# # Vector store ID for file searching
+# VECTOR_STORE_ID = "vs_689cb1ad26948191ad81f68542ff8a04"
+
+def get_or_create_vector_store():
+    # 1. List existing vector stores
+    stores = client.vector_stores.list()
+    if stores.data:
+        # return the first one
+        return stores.data[0].id
+
+    # 2. If none exist, create one
+    new_store = client.vector_stores.create(name="plant_disease")
+    return new_store.id
+
+# Dynamically fetch/create
+VECTOR_STORE_ID = get_or_create_vector_store()
 
 def analyze_image_with_openai(image_path: str, result_text: str = "Analyze this plant leaf image and return the results in JSON format.") -> dict:
     """
@@ -95,23 +119,40 @@ def analyze_image_with_openai(image_path: str, result_text: str = "Analyze this 
 
     )
 
-
     
     try:
         raw_text = extract_text_from_response(response)
         cleaned_text = clean_json_string(raw_text)
         result = json.loads(cleaned_text)
         
-        # Generate voice message based on analysis
         voice_message = f"I detected a {result['plant_type']} plant. "
+
         if result['is_healthy']:
             voice_message += "The plant appears to be healthy."
-            voice_type = "info"
+             # Append treatment steps safely
+            for section in ["cultural", "chemical", "preventive"]:
+                steps = result['treatment'].get(section)
+                if steps:
+                    if isinstance(steps, list):
+                        voice_message += " ".join(steps) + ". "
+                    else:
+                        voice_message += str(steps) + ". "
+
+            voice_type = "olufunmilola"
         else:
             voice_message += f"I found {result['disease']}. "
-            voice_message += "Here's what you should do: " + ", ".join(result['treatment']['cultural'][:2])
-            voice_type = "alert"
-        
+
+            # Append treatment steps safely
+            for section in ["cultural", "chemical", "preventive"]:
+                steps = result['treatment'].get(section)
+                if steps:
+                    if isinstance(steps, list):
+                        voice_message += " ".join(steps) + ". "
+                    else:
+                        voice_message += str(steps) + ". "
+            
+            voice_type = "olufunmilola"
+
         # Generate voice output
         result['voice_output'] = generate_voice_output(voice_message, voice_type)
         
@@ -143,25 +184,34 @@ def clean_json_string(raw_text):
     return cleaned.strip()
 
 
+
 def generate_voice_output(text: str, voice_type: str = "default") -> bytes:
     """
-    Generate voice output using Eleven Labs API.
-    
-    Args:
-        text: The text to convert to speech
-        voice_type: Type of voice to use ("default", "alert", or "info")
-        
-    Returns:
-        bytes: Audio data in bytes
+    Generate voice output using Eleven Labs API and return full MP3 bytes.
     """
-    voice_id = VOICE_IDS.get(voice_type, VOICE_IDS["default"])
+    voice_id = VOICE_IDS.get(voice_type, VOICE_IDS["olufunmilola"])
+    api_key = os.getenv("ELEVEN_LABS_API_KEY")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": api_key,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.7,
+            "similarity_boost": 0.7
+        }
+    }
+
     try:
-        audio = generate(
-            text=text,
-            voice=voice_id,
-            model="eleven_monolingual_v1"
-        )
-        return audio
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.content  # 🔹 FULL mp3 file
     except Exception as e:
         print(f"Voice generation failed: {str(e)}")
         return None
+

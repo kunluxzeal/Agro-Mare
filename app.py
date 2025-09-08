@@ -1,9 +1,11 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
+from fastapi.responses import StreamingResponse, FileResponse
+import uuid
 from io import BytesIO
 import numpy as np
 from io import BytesIO
 from PIL import Image
+import os
 import tensorflow as tf
 from pathlib import Path
 import json
@@ -12,19 +14,24 @@ import socket
 import os
 from fastapi.middleware.cors import CORSMiddleware
 from utils import analyze_image_with_openai, SYSTEM_PROMPT, VECTOR_STORE_ID
-
+from fastapi.staticfiles import StaticFiles
+import base64
 import requests
 
-
-MODEL_PATH = Path("../../training/hierarchical_models_mobilenetv2")
+MODEL_PATH = Path("hierarchical_models_mobilenetv2")
 DISEASE_CONFIDENCE_THRESHOLD = 0.4
 PLANT_TYPE_CONFIDENCE_THRESHOLD = 0.6
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Mode can be "offline" or "online"
 MODE = os.getenv("MODE", "offline").lower()
 
 
 app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -87,19 +94,19 @@ def internet_connected(timeout=3):
 def read_root():
     return {"message": "Plant Disease Detection API", "mode": MODE}
 
+
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(request: Request, file: UploadFile = File(...)):
     try:
         image_data = await file.read()
 
-        
         # Automatically determine mode
         if internet_connected():
             mode = "online"
         else:
             mode = "offline"
 
-        # OFFLINE MODE
+        # OFFLINE MODE (same as before)
         if mode == "offline":
             image_array = preprocess_image(image_data)
             image_batch = np.expand_dims(image_array, axis=0)
@@ -140,7 +147,7 @@ async def predict(file: UploadFile = File(...)):
                         })
             return result
 
-        # ONLINE MODE
+        # ONLINE MODE - Return JSON + Base64 audio
         elif mode == "online":
             if not internet_connected():
                 raise HTTPException(status_code=503, detail="No internet connection for online mode")
@@ -154,22 +161,24 @@ async def predict(file: UploadFile = File(...)):
                 result_text="Analyze and return disease prediction + treatment advice in JSON format"
             )
 
-            # Check if voice output is requested
-            accept_header = request.headers.get("accept", "")
-            if "audio/" in accept_header and treatment_json.get('voice_output'):
-                return StreamingResponse(
-                    BytesIO(treatment_json['voice_output']),
-                    media_type="audio/mpeg",
-                    headers={"X-Analysis": json.dumps(treatment_json)}
-                )
-            
-            # Remove voice_output from JSON response as it's binary data
-            if 'voice_output' in treatment_json:
-                del treatment_json['voice_output']
-                
+            audio_url = None
+            if treatment_json.get("voice_output"):  # voice bytes exist
+                 # Save voice to static file
+                audio_bytes = treatment_json["voice_output"]
+                filename = f"audio_{uuid.uuid4().hex}.mp3"
+                filepath = f"static/{filename}"
+                os.makedirs("static", exist_ok=True)
+                with open(filepath, "wb") as f:
+                    f.write(audio_bytes)
+
+                base_url = str(request.base_url).rstrip("/")
+                audio_url = f"{base_url}/static/{filename}"
+                del treatment_json["voice_output"]
+
             return {
                 "mode": "online",
-                "analysis": treatment_json
+                "analysis": treatment_json,
+                "audio_url":audio_url # 🔹 JSON always includes audio (if available)
             }
 
         else:

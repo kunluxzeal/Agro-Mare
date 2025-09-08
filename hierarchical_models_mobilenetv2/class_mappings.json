@@ -1,0 +1,32 @@
+{
+  "plant_types": [
+    "BellPepper",
+    "Potato",
+    "Tomato",
+    "unknown_images",
+    "unknown_plants"
+  ],
+  "disease_classes": {
+    "BellPepper": [
+      "Bell Pepper Bacterial Spot",
+      "Bell Pepper Healthy"
+    ],
+    "Potato": [
+      "Potato Early Blight",
+      "Potato Healthy Leaf",
+      "Potato Late Blight"
+    ],
+    "Tomato": [
+      "Tomato Bacterial Spot",
+      "Tomato EarlyBlight",
+      "Tomato Healthy Leaf",
+      "Tomato Late Blight"
+    ],
+    "unknown_images": [
+      "not_plants"
+    ],
+    "unknown_plants": [
+      "unknown"
+    ]
+  }
+}

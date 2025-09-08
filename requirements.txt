@@ -6,3 +6,4 @@ tensorflow
 openai
 python-dotenv
 elevenlabs
+pydub

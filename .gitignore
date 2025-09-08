@@ -18,3 +18,7 @@ build/
 *.coverage
 *.idea/
 *.vscode/
+
+# Environment files
+.env
+.env.*

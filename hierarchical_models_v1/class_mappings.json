@@ -1,0 +1,28 @@
+{
+  "plant_types": [
+    "Potato",
+    "Tomato",
+    "pepper",
+    "unknown"
+  ],
+  "disease_classes": {
+    "Potato": [
+      "Potato Early Blight",
+      "Potato Healthy Leaf",
+      "Potato Late Blight"
+    ],
+    "Tomato": [
+      "Tomato EarlyBlight",
+      "Tomato Healthy Leaf",
+      "Tomato Late Blight"
+    ],
+    "pepper": [
+      "Bell Pepper Bacterial Spot",
+      "Bell Pepper Healthy"
+    ],
+    "unknown": [
+      "not_plants",
+      "unknown_plant"
+    ]
+  }
+}
